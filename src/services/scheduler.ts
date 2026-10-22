@@ -21,14 +21,73 @@ export class SchedulerService extends Service {
     const config = ctx['oss-contrib'].config
 
     ctx.on('ready', () => {
-      if (config.scheduler.enabled) {
-        ctx.logger('oss-contrib').info('Scheduler enabled')
-        // For now, manual triggering only
-        // TODO: implement cron-based scheduling if interval is set
+      if (config.scheduler.enabled && config.scheduler.interval) {
+        ctx.logger('oss-contrib').info(`Scheduler enabled with interval: ${config.scheduler.interval}`)
+        this.startCronSchedule(config.scheduler.interval)
+      } else if (config.scheduler.enabled) {
+        ctx.logger('oss-contrib').warn('Scheduler enabled but no interval specified')
       } else {
         ctx.logger('oss-contrib').info('Scheduler disabled (manual mode)')
       }
     })
+  }
+
+  /**
+   * Start cron-based scheduling
+   * Parses cron expression and schedules periodic runs
+   */
+  private startCronSchedule(cronExpr: string) {
+    const logger = this.ctx.logger('oss-contrib')
+
+    // Parse cron expression (simplified - supports basic patterns)
+    // Format: "0 */6 * * *" = every 6 hours
+    const match = cronExpr.match(/^\*\/(\d+)/)
+
+    if (match) {
+      // Interval-based scheduling (e.g., */6 for every 6 units)
+      const intervalMinutes = parseInt(match[1]) * 60 // Assume hours
+      logger.info(`Starting interval-based schedule: every ${intervalMinutes} minutes`)
+
+      this.intervalId = setInterval(() => {
+        this.runScheduledCycle()
+      }, intervalMinutes * 60 * 1000)
+    } else {
+      logger.warn(`Unsupported cron expression: ${cronExpr}. Use format like "*/6" for interval scheduling.`)
+    }
+  }
+
+  /**
+   * Run a scheduled cycle automatically
+   */
+  private async runScheduledCycle() {
+    const logger = this.ctx.logger('oss-contrib')
+
+    if (this.isRunActive()) {
+      logger.warn('Skipping scheduled run: previous run still active')
+      return
+    }
+
+    const runId = `auto-${Date.now()}`
+    logger.info(`Starting scheduled cycle: ${runId}`)
+
+    try {
+      await this.prepare(runId, { mode: 'all' })
+      // Note: Actual task execution should be handled by external orchestration
+      // This just prepares the run
+    } catch (error) {
+      logger.error(`Scheduled cycle failed: ${error}`)
+    }
+  }
+
+  /**
+   * Stop cron scheduling
+   */
+  stopSchedule() {
+    if (this.intervalId) {
+      clearInterval(this.intervalId)
+      this.intervalId = undefined
+      this.ctx.logger('oss-contrib').info('Scheduler stopped')
+    }
   }
 
   private get bridge(): PythonBridge {

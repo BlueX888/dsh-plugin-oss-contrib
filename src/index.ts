@@ -3,6 +3,7 @@ import { Config } from './config.js'
 import { PythonBridge } from './services/python-bridge.js'
 import { StateService } from './services/state.js'
 import { SchedulerService } from './services/scheduler.js'
+import { WorkflowService } from './services/workflow.js'
 import { HuntPhase } from './phases/hunt.js'
 import { ShipPhase } from './phases/ship.js'
 import { TrackPhase } from './phases/track.js'
@@ -16,6 +17,7 @@ declare module 'cordis' {
     'oss-contrib': OssContribPlugin
     'oss-contrib/state': StateService
     'oss-contrib/scheduler': SchedulerService
+    'oss-contrib/workflow': WorkflowService
     'oss-contrib/hunt': HuntPhase
     'oss-contrib/ship': ShipPhase
     'oss-contrib/track': TrackPhase
@@ -56,6 +58,7 @@ export class OssContribPlugin extends Service {
     // Register services and phases
     ctx.plugin(StateService)
     ctx.plugin(SchedulerService)
+    ctx.plugin(WorkflowService)
     ctx.plugin(HuntPhase)
     ctx.plugin(ShipPhase)
     ctx.plugin(TrackPhase)
@@ -70,6 +73,7 @@ export class OssContribPlugin extends Service {
       ctx.logger('oss-contrib').info(`Root: ${config.paths.root}`)
       ctx.logger('oss-contrib').info(`State: ${config.paths.state}`)
       ctx.logger('oss-contrib').info('Registered 4 phases: hunt, ship, track, homepage')
+      ctx.logger('oss-contrib').info('Workflow service ready')
     })
   }
 }
