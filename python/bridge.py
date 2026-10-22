@@ -7,6 +7,7 @@ Provides JSON-based IPC interface to Python modules from Node.js
 import json
 import sys
 import os
+import contextlib
 from pathlib import Path
 from typing import Any, Dict
 
@@ -37,7 +38,8 @@ def call_module(module: str, method: str, args: list, kwargs: dict) -> Dict[str,
         func = getattr(mod, method)
 
         # Call with args
-        result = func(*args, **kwargs)
+        with contextlib.redirect_stdout(sys.stderr):
+            result = func(*args, **kwargs)
 
         return {
             "status": "ok",

@@ -1,3 +1,5 @@
+> 历史文档：其中的完成状态、安装和路由描述已过时。当前行为与验证范围以 [README](README.md) 和 [验收记录](docs/VERIFICATION.md) 为准。
+
 # Skill Routing Guide for oss-contrib Plugin
 
 This plugin provides MCP tools that replace the original skill invocations.

@@ -1,163 +1,84 @@
-import { Context, Service } from 'cordis'
-import { PythonBridge } from '../services/python-bridge.js'
-
-/**
- * Ship Phase Service
- * Covers: fix_ready → reviewed → published
- */
+import { Context, Service } from '@deepseek-ai/cordis'
+import { readFile } from 'node:fs/promises'
 export class ShipPhase extends Service {
-  static inject = ['oss-contrib']
-
+  static inject = ['oss-contrib/native']
   constructor(ctx: Context) {
     super(ctx, 'oss-contrib/ship')
   }
-
-  private get bridge(): PythonBridge {
-    return this.ctx['oss-contrib'].bridge
+  private get native() {
+    return this.ctx['oss-contrib/native']
   }
-
-  private get rootPath(): string {
-    return this.ctx['oss-contrib'].config.paths.root
+  async checkQuota() {
+    const r = await this.native.exec('quota.py', ['--json'], {}, [0, 2])
+    return { ...JSON.parse(r.stdout), exitCode: r.code }
   }
-
-  /**
-   * Check publishing quota
-   */
-  async checkQuota(): Promise<any> {
-    const result = await this.bridge.exec(
-      `${this.rootPath}/bin/quota.py`,
-      ['--json'],
-      { timeout: 30000 }
-    )
-
-    if (result.code !== 0) {
-      throw new Error(`quota check failed: ${result.stderr}`)
-    }
-
-    return JSON.parse(result.stdout)
-  }
-
-  /**
-   * Generate claim comment for an issue
-   */
-  async claim(options: {
-    issue: string
-    repo: string
-    slug?: string
-    rootCause?: string
-    fixNote?: string
-    dryRun?: boolean
-  }): Promise<any> {
-    const args = ['auto']
-    if (options.repo) args.push('--repo', options.repo)
-    if (options.issue) args.push('--issue', options.issue)
-    if (options.slug) args.push('--slug', options.slug)
-    if (options.rootCause) args.push('--root-cause', options.rootCause)
-    if (options.fixNote) args.push('--fix-note', options.fixNote)
-    if (options.dryRun) args.push('--dry-run')
-    else args.push('--mode', 'comment-only')
-
-    const result = await this.bridge.exec(
-      `${this.rootPath}/bin/claim.py`,
-      args,
-      { timeout: 60000 }
-    )
-
-    return {
-      success: result.code === 0,
-      output: result.stdout,
-      stderr: result.stderr,
-    }
-  }
-
-  /**
-   * Publish PR/issue
-   */
   async publish(options: {
     manifest: string
-    kind: 'issue' | 'pr' | 'update'
+    kind?: 'issue' | 'pr' | 'update'
     execute?: boolean
-    runId?: string
-    inspect?: boolean
-  }): Promise<any> {
-    const args = ['--manifest', options.manifest, 'kind: ' + options.kind]
-    if (options.execute) args.push('--execute')
-    if (options.runId) args.push('--run-id', options.runId)
-    if (options.inspect) args.push('--inspect')
-
-    const result = await this.bridge.exec(
-      `${this.rootPath}/bin/publish.py`,
-      args,
-      { timeout: 300000 }
+    runId: string
+  }) {
+    if (!options.runId) throw new Error('runId is required by the native publisher')
+    const manifest = JSON.parse(await readFile(options.manifest, 'utf8'))
+    if (options.kind && options.kind !== (manifest.kind || 'pr'))
+      throw new Error('kind must match manifest.kind')
+    await this.native.assertCompatible()
+    const r = await this.native.exec(
+      'publish.py',
+      [
+        '--manifest',
+        options.manifest,
+        '--run-id',
+        options.runId,
+        ...(options.execute ? ['--execute'] : []),
+      ],
+      { timeout: 300000 },
+      [0, 2, 3],
     )
-
+    const result = JSON.parse(r.stdout)
     return {
-      success: result.code === 0,
-      exitCode: result.code,
-      output: result.stdout,
-      stderr: result.stderr,
+      ...result,
+      exitCode: r.code,
+      success: r.code === 0 && !['blocked', 'error'].includes(result.status),
     }
   }
-
-  /**
-   * Generate evidence receipt (red or green)
-   */
   async evidence(options: {
-    color: 'red' | 'green'
+    color?: string
+    role?: string
+    actor: 'implementer' | 'reviewer'
+    runId: string
     worktree: string
     outputPath: string
     command: string[]
     timeout?: number
-  }): Promise<any> {
+    harness?: string[]
+  }) {
+    const role = options.role || options.color
+    if (!role || !options.actor || !options.runId)
+      throw new Error('role, actor and runId are required')
     const args = [
-      options.color,
-      '--worktree', options.worktree,
-      '--out', options.outputPath,
+      '--worktree',
+      options.worktree,
+      '--role',
+      role,
+      '--actor',
+      options.actor,
+      '--run-id',
+      options.runId,
+      '--out',
+      options.outputPath,
+      '--timeout',
+      String(Math.floor((options.timeout || 600000) / 1000)),
+      ...(options.harness || []).flatMap((p) => ['--harness', p]),
       '--',
       ...options.command,
     ]
-
-    const result = await this.bridge.exec(
-      `${this.rootPath}/bin/evidence.py`,
+    const r = await this.native.exec(
+      'evidence.py',
       args,
-      { timeout: options.timeout || 600000 }
+      { timeout: (options.timeout || 600000) + 10000 },
+      [0, 2],
     )
-
-    return {
-      receiptPath: options.outputPath,
-      success: result.code === 0,
-      output: result.stdout,
-      stderr: result.stderr,
-    }
-  }
-
-  /**
-   * Post a comment to PR/issue
-   */
-  async comment(options: {
-    repo: string
-    number: number
-    bodyFile: string
-    execute?: boolean
-    eventId?: string
-  }): Promise<any> {
-    const args = [
-      '--repo', options.repo,
-      '--number', options.number.toString(),
-      '--body-file', options.bodyFile,
-    ]
-    if (options.execute) args.push('--execute')
-    if (options.eventId) args.push('--event-id', options.eventId)
-
-    const result = await this.bridge.exec(
-      `${this.rootPath}/bin/comment.py`,
-      args,
-      { timeout: 60000 }
-    )
-
-    return {
-      success: result.code === 0,
-      output: result.stdout,
-    }
+    return { ...JSON.parse(r.stdout), success: r.code === 0, exitCode: r.code }
   }
 }

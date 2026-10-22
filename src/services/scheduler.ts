@@ -1,240 +1,105 @@
-import { Context, Service } from 'cordis'
-import { PythonBridge } from './python-bridge.js'
-
-export interface CycleResult {
-  runId: string
-  status: 'done' | 'waiting' | 'retry' | 'needs_user'
-  tasksCompleted: number
-  tasksPending: number
-  errors?: string[]
+import { Context, Service } from '@deepseek-ai/cordis'
+import { CronExpressionParser } from 'cron-parser'
+import { RunOptions } from './executor.js'
+export function nextScheduledAt(expression: string, timezone: string, now = new Date()) {
+  return CronExpressionParser.parse(expression, { tz: timezone, currentDate: now }).next().toDate()
 }
-
 export class SchedulerService extends Service {
-  static inject = ['oss-contrib', 'oss-contrib/state']
-
-  private intervalId?: NodeJS.Timeout
-  private currentRunId?: string
-
+  static inject = ['oss-contrib', 'oss-contrib/native', 'oss-contrib/executor']
+  private timer?: NodeJS.Timeout
+  private stopped = false
+  nextRunAt?: string
   constructor(ctx: Context) {
     super(ctx, 'oss-contrib/scheduler')
-
-    const config = ctx['oss-contrib'].config
-
-    ctx.on('ready', () => {
-      if (config.scheduler.enabled && config.scheduler.interval) {
-        ctx.logger('oss-contrib').info(`Scheduler enabled with interval: ${config.scheduler.interval}`)
-        this.startCronSchedule(config.scheduler.interval)
-      } else if (config.scheduler.enabled) {
-        ctx.logger('oss-contrib').warn('Scheduler enabled but no interval specified')
-      } else {
-        ctx.logger('oss-contrib').info('Scheduler disabled (manual mode)')
-      }
+    const config = ctx['oss-contrib'].config.scheduler
+    if (config.enabled) nextScheduledAt(config.interval, config.timezone)
+    ctx.effect(() => () => {
+      this.stopped = true
+      if (this.timer) clearTimeout(this.timer)
     })
+    if (config.enabled)
+      ctx.inject(['agents', 'agentLoop'], (ready) => {
+        const timer = setTimeout(() => {
+          void this.start().catch((error) => ctx.logger('oss-contrib').error(String(error)))
+        }, 0)
+        ready.effect(() => () => {
+          clearTimeout(timer)
+          if (this.timer) clearTimeout(this.timer)
+        })
+      })
   }
-
-  /**
-   * Start cron-based scheduling
-   * Parses cron expression and schedules periodic runs
-   */
-  private startCronSchedule(cronExpr: string) {
-    const logger = this.ctx.logger('oss-contrib')
-
-    // Parse cron expression (simplified - supports basic patterns)
-    // Format: "0 */6 * * *" = every 6 hours
-    const match = cronExpr.match(/^\*\/(\d+)/)
-
-    if (match) {
-      // Interval-based scheduling (e.g., */6 for every 6 units)
-      const intervalMinutes = parseInt(match[1]) * 60 // Assume hours
-      logger.info(`Starting interval-based schedule: every ${intervalMinutes} minutes`)
-
-      this.intervalId = setInterval(() => {
-        this.runScheduledCycle()
-      }, intervalMinutes * 60 * 1000)
-    } else {
-      logger.warn(`Unsupported cron expression: ${cronExpr}. Use format like "*/6" for interval scheduling.`)
-    }
-  }
-
-  /**
-   * Run a scheduled cycle automatically
-   */
-  private async runScheduledCycle() {
-    const logger = this.ctx.logger('oss-contrib')
-
-    if (this.isRunActive()) {
-      logger.warn('Skipping scheduled run: previous run still active')
-      return
-    }
-
-    const runId = `auto-${Date.now()}`
-    logger.info(`Starting scheduled cycle: ${runId}`)
-
+  private async start() {
+    const executor = this.ctx['oss-contrib/executor']
     try {
-      await this.prepare(runId, { mode: 'all' })
-      // Note: Actual task execution should be handled by external orchestration
-      // This just prepares the run
-    } catch (error) {
-      logger.error(`Scheduled cycle failed: ${error}`)
+      const status = await executor.status()
+      if (status.runId && !['finished', 'idle', 'busy', 'cancelled'].includes(status.status))
+        await executor.recover()
+      else if (this.ctx['oss-contrib'].config.scheduler.runOnStart) await this.tick()
+    } finally {
+      this.schedule()
     }
   }
-
-  /**
-   * Stop cron scheduling
-   */
-  stopSchedule() {
-    if (this.intervalId) {
-      clearInterval(this.intervalId)
-      this.intervalId = undefined
-      this.ctx.logger('oss-contrib').info('Scheduler stopped')
-    }
-  }
-
-  private get bridge(): PythonBridge {
-    return this.ctx['oss-contrib'].bridge
-  }
-
-  private get rootPath(): string {
-    return this.ctx['oss-contrib'].config.paths.root
-  }
-
-  /**
-   * Prepare a new cycle run
-   */
-  async prepare(runId: string, options: {
-    mode?: 'all' | 'hunt' | 'ship' | 'followup'
-    targets?: string[]
-    batchSize?: number
-  } = {}): Promise<any> {
-    const logger = this.ctx.logger('oss-contrib')
-    logger.info(`Preparing cycle run: ${runId}`)
-
-    const args = ['prepare', '--run-id', runId]
-    if (options.mode) args.push('--mode', options.mode)
-    if (options.batchSize) args.push('--batch-size', options.batchSize.toString())
-
-    const result = await this.bridge.exec(
-      `${this.rootPath}/bin/cycle.py`,
-      args,
-      { timeout: 120000 }
+  private schedule() {
+    if (this.stopped) return
+    if (this.timer) clearTimeout(this.timer)
+    const c = this.ctx['oss-contrib'].config.scheduler
+    const next = nextScheduledAt(c.interval, c.timezone)
+    this.nextRunAt = next.toISOString()
+    // Clamp long timers and recalculate instead of overflowing Node's 32-bit timer.
+    const delay = next.getTime() - Date.now()
+    this.timer = setTimeout(
+      () => {
+        if (delay > 2147483647) {
+          this.schedule()
+          return
+        }
+        void this.tick()
+          .catch((e) => this.ctx.logger('oss-contrib').error(String(e)))
+          .finally(() => this.schedule())
+      },
+      Math.min(delay, 2147483647),
     )
-
-    if (result.code !== 0) {
-      throw new Error(`cycle.py prepare failed: ${result.stderr}`)
-    }
-
-    this.currentRunId = runId
-
-    // Emit event
-    this.ctx.emit('oss-cycle:prepare', runId)
-
-    return {
-      runId,
-      output: result.stdout,
-      stderr: result.stderr,
-    }
   }
-
-  /**
-   * Heartbeat: check run status and pending tasks
-   */
-  async heartbeat(runId: string): Promise<any> {
-    const logger = this.ctx.logger('oss-contrib')
-    logger.debug(`Heartbeat for run: ${runId}`)
-
-    const args = ['heartbeat', '--run-id', runId, '--json']
-
-    const result = await this.bridge.exec(
-      `${this.rootPath}/bin/cycle.py`,
-      args,
-      { timeout: 60000 }
+  private async tick() {
+    const c = this.ctx['oss-contrib'].config.scheduler
+    const e = this.ctx['oss-contrib/executor'],
+      status = await e.status()
+    if (status.active) return
+    if (status.runId && !['finished', 'idle', 'busy', 'cancelled'].includes(status.status))
+      return e.recover()
+    return e.run({ mode: c.mode, targets: c.targets, batchSize: c.batchSize })
+  }
+  prepare(runId: string, options: RunOptions = {}) {
+    return this.ctx['oss-contrib/native'].json(
+      'cycle.py',
+      [
+        'prepare',
+        '--run-id',
+        runId,
+        '--mode',
+        options.mode || 'all',
+        '--host-slots',
+        '1',
+        ...(options.targets || []).flatMap((t) => ['--target', t]),
+        ...(options.batchSize ? ['--batch-size', String(options.batchSize)] : []),
+        ...(options.snapshot ? ['--snapshot', options.snapshot] : []),
+      ],
+      { timeout: 3600000 },
     )
-
-    if (result.code !== 0) {
-      throw new Error(`cycle.py heartbeat failed: ${result.stderr}`)
-    }
-
-    const data = JSON.parse(result.stdout)
-
-    // Emit event
-    this.ctx.emit('oss-cycle:heartbeat', runId, data.tasks || [])
-
-    return data
   }
-
-  /**
-   * Finish a specific task in the cycle
-   */
-  async finishTask(runId: string, taskId: string, taskResult: any): Promise<any> {
-    const logger = this.ctx.logger('oss-contrib')
-    logger.info(`Finishing task: ${taskId}`)
-
-    const args = [
+  heartbeat(runId: string) {
+    return this.ctx['oss-contrib/native'].json('cycle.py', ['heartbeat', runId])
+  }
+  finishTask(runId: string, taskId: string, resultPath: string) {
+    return this.ctx['oss-contrib/native'].json('cycle.py', [
       'finish-task',
-      '--run-id', runId,
-      '--result', JSON.stringify(taskResult),
-    ]
-
-    const result = await this.bridge.exec(
-      `${this.rootPath}/bin/cycle.py`,
-      args,
-      { timeout: 60000 }
-    )
-
-    if (result.code !== 0) {
-      throw new Error(`cycle.py finish-task failed: ${result.stderr}`)
-    }
-
-    return {
-      taskId,
-      settled: true,
-      output: result.stdout,
-    }
-  }
-
-  /**
-   * Finish the entire cycle run
-   */
-  async finish(runId: string, options: { snapshot?: string } = {}): Promise<CycleResult> {
-    const logger = this.ctx.logger('oss-contrib')
-    logger.info(`Finishing cycle run: ${runId}`)
-
-    const args = ['finish', '--run-id', runId]
-    if (options.snapshot) args.push('--snapshot', options.snapshot)
-
-    const result = await this.bridge.exec(
-      `${this.rootPath}/bin/cycle.py`,
-      args,
-      { timeout: 300000 }
-    )
-
-    const cycleResult: CycleResult = {
       runId,
-      status: result.code === 0 ? 'done' : 'needs_user',
-      tasksCompleted: 0, // TODO: parse from output
-      tasksPending: 0,
-      errors: result.code !== 0 ? [result.stderr] : undefined,
-    }
-
-    // Emit event
-    this.ctx.emit('oss-cycle:finish', runId, cycleResult)
-
-    this.currentRunId = undefined
-
-    return cycleResult
+      taskId,
+      '--result',
+      resultPath,
+    ])
   }
-
-  /**
-   * Get current run ID
-   */
-  getCurrentRunId(): string | undefined {
-    return this.currentRunId
-  }
-
-  /**
-   * Check if a run is active
-   */
-  isRunActive(): boolean {
-    return this.currentRunId !== undefined
+  finish(runId: string) {
+    return this.ctx['oss-contrib/native'].json('cycle.py', ['finish', runId])
   }
 }
