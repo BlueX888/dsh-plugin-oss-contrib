@@ -1,103 +1,47 @@
-import { Context, Service } from 'cordis'
-import { PythonBridge } from '../services/python-bridge.js'
-
-/**
- * Track Phase Service
- * Covers: following → terminal
- */
+import { Context, Service } from '@deepseek-ai/cordis'
 export class TrackPhase extends Service {
-  static inject = ['oss-contrib']
-
+  static inject = ['oss-contrib/native']
   constructor(ctx: Context) {
     super(ctx, 'oss-contrib/track')
   }
-
-  private get bridge(): PythonBridge {
-    return this.ctx['oss-contrib'].bridge
+  private get native() {
+    return this.ctx['oss-contrib/native']
   }
-
-  private get rootPath(): string {
-    return this.ctx['oss-contrib'].config.paths.root
-  }
-
-  /**
-   * Take a tracking snapshot
-   */
   async snapshot(options: {
     outputDir: string
     incremental?: boolean
     previous?: string
     resume?: string
-  }): Promise<any> {
-    const args = ['--out-dir', options.outputDir]
-    if (options.incremental) args.push('--incremental')
-    if (options.previous) args.push('--previous', options.previous)
-    if (options.resume) args.push('--resume', options.resume)
-
-    const result = await this.bridge.exec(
-      `${this.rootPath}/bin/track.py`,
-      args,
-      { timeout: 600000 }
+  }) {
+    const r = await this.native.exec(
+      'track.py',
+      [
+        '--out-dir',
+        options.outputDir,
+        ...(options.incremental ? ['--incremental'] : []),
+        ...(options.previous ? ['--previous', options.previous] : []),
+        ...(options.resume ? ['--resume', options.resume] : []),
+      ],
+      { timeout: 3600000 },
+      [0, 2],
     )
-
-    return {
-      snapshotDir: options.outputDir,
-      success: result.code === 0,
-      output: result.stdout,
-      stderr: result.stderr,
-    }
+    return { ...JSON.parse(r.stdout), exitCode: r.code }
   }
-
-  /**
-   * Generate change cards for PRs/issues
-   */
-  async cards(options: {
-    outputDir: string
-    since?: string
-    workers?: number
-    mode?: 'batch' | 'pr' | 'issue' | 'ci'
-  }): Promise<any> {
-    const mode = options.mode || 'batch'
-    const args = [mode, '--out', options.outputDir]
-
-    if (options.since) args.push('--since', options.since)
-    if (options.workers) args.push('--workers', options.workers.toString())
-
-    const result = await this.bridge.exec(
-      `${this.rootPath}/bin/cards.py`,
-      args,
-      { timeout: 300000 }
+  async cards(options: { targets: string[]; outputDir: string; since?: string; workers?: number }) {
+    if (!options.targets?.length) throw new Error('cards requires at least one owner/repo#N target')
+    const r = await this.native.exec(
+      'cards.py',
+      [
+        'batch',
+        options.targets.join(','),
+        '--out',
+        options.outputDir,
+        ...(options.since ? ['--since', options.since] : []),
+        ...(options.workers ? ['--workers', String(options.workers)] : []),
+      ],
+      { timeout: 300000 },
+      [0, 2],
     )
-
-    return {
-      cardsDir: options.outputDir,
-      success: result.code === 0,
-      output: result.stdout,
-    }
-  }
-
-  /**
-   * Run followup (legacy wrapper)
-   */
-  async followup(options: {
-    outputDir: string
-    since?: string
-    all?: boolean
-  }): Promise<any> {
-    const args = ['--out-dir', options.outputDir]
-    if (options.since) args.push('--since', options.since)
-    if (options.all) args.push('--all')
-
-    const result = await this.bridge.exec(
-      `${this.rootPath}/bin/followup.py`,
-      args,
-      { timeout: 300000 }
-    )
-
-    return {
-      outputDir: options.outputDir,
-      success: result.code === 0,
-      output: result.stdout,
-    }
+    return { output: r.stdout, stderr: r.stderr, exitCode: r.code, complete: r.code === 0 }
   }
 }

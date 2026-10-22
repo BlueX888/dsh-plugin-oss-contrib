@@ -1,80 +1,87 @@
 # dsh-plugin-oss-contrib
 
-Open source contribution pipeline plugin for DeepSeek Harness.
+DSH 自动贡献插件，复用已有 OSS Python 核心，在宿主内执行任务、验证结果、结算并恢复中断周期。当前版本 **0.2.1**，验证宿主为 DSH **0.2.1-rc.2**。
 
-## Features
+## 已实现
 
-- **Hunt**: Discover and analyze bugs in GitHub repositories
-- **Ship**: Publish PRs with evidence and reviewer approval
-- **Track**: Monitor PR status, CI failures, and maintainer feedback
-- **Homepage**: Sync contributions to GitHub profile repository
+- 23 个原生 DSH 工具：发现、筛选、证据执行、受门禁约束的发布、跟踪、状态与周期管理。
+- DSH Agent 执行器：原生任务描述 → 独立 session → 持久化结果 → 原生结算。
+- 定时器、心跳、任务步数与时间上限、取消、卸载清理、恢复与互斥。
+- 沿用原生策略、配额、独立验证收据、文件锁、发布去重和账本格式。
 
-## Installation
+这是现有核心的宿主适配版：需要配置根目录中的 `bin/` 和 `skill/oss-contrib/`，npm 包不包含整套 Python 核心。账户和配额以原生核心/账本为准；配置中的 `github.user`、`quota.*` 是一致性检查，不能用来更换账户或静默修改配额。
 
-```bash
-# From local directory (development)
-dsh plugin add /path/to/dsh-plugin-oss-contrib
+[安装](INSTALL.md) · [故障排查](TROUBLESHOOTING.md) · [验收证据及原规划映射](docs/VERIFICATION.md) · [测试说明](tests/README.md)
 
-# From npm (once published)
-dsh plugin add dsh-plugin-oss-contrib
+## 使用
 
-# From tarball
-dsh plugin add ./dsh-plugin-oss-contrib-0.1.0.tgz
+先调用 `oss_doctor` 检查依赖和有效配置，再调用：
+
+```json
+{"mode":"followup","batchSize":3}
 ```
 
-## Configuration
+上面是 `oss_run_execute` 的参数，跟进已有贡献。定向任务可用：
 
-Edit your profile's `cordis.patch.yml`:
+```json
+{"mode":"ship","targets":["owner/repo#123"],"batchSize":1}
+```
+
+`oss_run_status` 查看状态和 session ID；`oss_run_cancel` 中断并保留恢复记录；`oss_run_recover` 恢复最近未完成周期。恢复同一 run 必须保持 mode/targets。没有适合任务时返回 idle，不代表完成了新贡献。
+
+手动 `oss_ship_publish` 默认 dry-run；明确 `execute:true` 才调用受原生门禁约束的外部写入。运行贡献周期会执行核心为任务授权的操作，包括满足门禁后的发布。不要把真实周期当成只读测试。
+
+## 无人值守配置
+
+在已有 `oss-contrib` 行上覆盖配置；不要再次 insert 同名插件：
 
 ```yaml
-oss-contrib:
-  paths:
-    root: F:/PR
-    state: F:/PR/state
-  github:
-    user: YourGitHubUsername
-  quota:
-    pauseThreshold: 24
+- id: oss-contrib
+  config:
+    paths:
+      root: F:/PR
+    agent:
+      taskTimeoutMs: 3600000
+      maxSteps: 160
+    scheduler:
+      enabled: true
+      interval: '0 */6 * * *'
+      timezone: Asia/Shanghai
+      runOnStart: false
+      mode: all
+      batchSize: 3
+      targets: []
 ```
 
-Or use environment variables:
-- `OSS_ROOT`: Root directory
-- `OSS_STATE`: State directory
-- `GITHUB_TOKEN`: GitHub API token
+安装默认 `enabled:false`，避免安装即发起贡献。宿主加载 agents/agentLoop 后开始调度，按同一账本串行运行；最近有未完成周期时优先恢复。默认模型继承宿主；可指定 `agent.provider/model/preset`。
 
-## Available Tools
+工作 session 继承宿主权限；可用 `agent.permissionPreset` 指定已存在的 DSH 权限预设，仅作用于插件创建的 session。需要人工批准的工具请求返回拒绝，提示 worker 以 `needs_user` 记录所需操作，避免无限等待。身份登录、仓库策略、配额或维护者回复未满足时仍应等待或阻塞，不绕过门禁。
 
-### State Management
-- `oss_state_brief`: Get pipeline status summary
+宿主退出后不运行定时任务；硬崩溃后的活跃原生租约不会被强抢，恢复会等待其失效。已保存结果会直接结算；尚未保存的工作可能重做，外部发布的幂等由原生发布器保证。运行日志保存在 `<state>/dsh-plugin/latest.json` 和 `runs/<runId>.json`，原生证据/结果仍由核心保存。日志不保存 token。
 
-### Hunt Phase
-- `oss_hunt_discover`: Discover issues from a repository
+## 工具
 
-### More tools coming in later migration phases...
+| 分组 | 工具 |
+|---|---|
+| 状态 | oss_state_brief、oss_state_summary、oss_state_worklist、oss_state_ready_peek |
+| 发现 | oss_hunt_discover、oss_hunt_probe、oss_hunt_screen、oss_hunt_preflight |
+| 发布与证据 | oss_ship_quota、oss_ship_publish、oss_ship_evidence |
+| 跟踪 | oss_track_snapshot、oss_track_cards、oss_homepage_status |
+| 执行 | oss_run_execute、oss_run_recover、oss_run_status、oss_run_cancel |
+| 高级周期接口 | oss_run_prepare、oss_run_heartbeat、oss_run_finish_task、oss_run_finish |
+| 诊断 | oss_doctor |
 
-## Development
+高级接口用于已有协调器接入；通常只需 execute，不要与执行中的周期混用。旧 workflow 服务名称 oss-hunt/oss-ship/oss-followup/oss-round 分别路由至 hunt/ship/followup/all。原 CLI/Skill 保持可用；插件不修改 Claude Code 的 skill 或软链接。
 
-```bash
-# Install dependencies
-npm install
+## 开发
 
-# Build
-npm run build
+Node.js 22、Python 3.12+、Git；真实 GitHub 操作另需已认证 gh 和原生核心所需环境。
 
-# Watch mode
-npm run dev
-
-# Test
+```powershell
+npm ci
 npm test
+npm run format:check
+npm pack
 ```
-
-## Requirements
-
-- Python 3.12+
-- Node.js 20+
-- Git
-- GitHub CLI (`gh`) authenticated
-
-## License
 
 MIT

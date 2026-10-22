@@ -1,132 +1,46 @@
-import { Context, Service } from 'cordis'
-import { PythonBridge } from '../services/python-bridge.js'
-
-/**
- * Hunt Phase Service
- * Covers: discovered → reproduced → fix_ready
- */
+import { Context, Service } from '@deepseek-ai/cordis'
 export class HuntPhase extends Service {
-  static inject = ['oss-contrib']
-
+  static inject = ['oss-contrib/native']
   constructor(ctx: Context) {
     super(ctx, 'oss-contrib/hunt')
   }
-
-  private get bridge(): PythonBridge {
-    return this.ctx['oss-contrib'].bridge
+  private get native() {
+    return this.ctx['oss-contrib/native']
   }
-
-  private get rootPath(): string {
-    return this.ctx['oss-contrib'].config.paths.root
+  async discover(repo: string) {
+    return { output: (await this.native.exec('discover.py', [repo], { timeout: 120000 })).stdout }
   }
-
-  /**
-   * Discover issues from a repository
-   */
-  async discover(repo: string): Promise<{ issues: any[]; output: string }> {
-    const result = await this.bridge.exec(
-      `${this.rootPath}/bin/discover.py`,
-      [repo],
-      { timeout: 120000 }
-    )
-
-    if (result.code !== 0) {
-      throw new Error(`discover failed: ${result.stderr}`)
-    }
-
-    return {
-      issues: [], // TODO: parse output
-      output: result.stdout,
-    }
+  async probe(target: string) {
+    const r = await this.native.exec('probe.py', [target], { timeout: 180000 }, [0, 1, 2, 3])
+    return { output: r.stdout, stderr: r.stderr, exitCode: r.code }
   }
-
-  /**
-   * Probe a specific issue (deep investigation)
-   */
-  async probe(target: string): Promise<any> {
-    const result = await this.bridge.exec(
-      `${this.rootPath}/bin/probe.py`,
-      [target],
-      { timeout: 180000 }
-    )
-
-    return {
-      target,
-      exitCode: result.code,
-      output: result.stdout,
-      stderr: result.stderr,
-    }
+  async screen(options: {
+    repo?: string
+    issue?: string
+    kw?: string
+    path?: string
+    reposFile?: string
+  }) {
+    let args: string[]
+    if (options.reposFile) args = ['sweep', options.reposFile]
+    else if (options.issue) args = ['io', options.issue]
+    else if (options.repo && (options.kw || options.path))
+      args = [
+        'clash',
+        options.repo,
+        ...(options.kw ? ['--kw', options.kw] : []),
+        ...(options.path ? ['--path', options.path] : []),
+      ]
+    else if (options.repo) args = ['repo', options.repo]
+    else throw new Error('screen requires repo, issue (owner/repo#N), or reposFile')
+    const r = await this.native.exec('screen.py', args, { timeout: 120000 })
+    return { output: r.stdout, exitCode: r.code }
   }
-
-  /**
-   * Screen for policy violations and duplicates
-   */
-  async screen(options: { issue?: string; repo?: string; kw?: string }): Promise<{ passed: boolean; output: string }> {
-    const args = ['sweep']
-    if (options.issue) args.push('--issue', options.issue)
-    if (options.repo) args.push('--path', options.repo)
-    if (options.kw) args.push('--kw', options.kw)
-
-    const result = await this.bridge.exec(
-      `${this.rootPath}/bin/screen.py`,
-      args,
-      { timeout: 60000 }
-    )
-
-    return {
-      passed: result.code === 0,
-      output: result.stdout,
-    }
+  async getPolicy(repo: string) {
+    return { output: (await this.native.exec('policy.py', [repo, '--full'])).stdout }
   }
-
-  /**
-   * Check collision (duplicate detection)
-   */
-  async checkCollision(issue: string, options: { days?: number; path?: string }): Promise<boolean> {
-    const args = ['--issue', issue]
-    if (options.days) args.push('--days', options.days.toString())
-    if (options.path) args.push('--path', options.path)
-
-    const result = await this.bridge.exec(
-      `${this.rootPath}/bin/collide.py`,
-      args,
-      { timeout: 30000 }
-    )
-
-    return result.code === 0
-  }
-
-  /**
-   * Get repository policy summary
-   */
-  async getPolicy(repo: string): Promise<any> {
-    const result = await this.bridge.exec(
-      `${this.rootPath}/bin/policy.py`,
-      [repo, '--full'],
-      { timeout: 60000 }
-    )
-
-    return {
-      repo,
-      output: result.stdout,
-    }
-  }
-
-  /**
-   * Run preflight checks (circuit breaker, rotation)
-   */
-  async preflight(): Promise<{ passed: boolean; exitCode: number | null; output: string }> {
-    const result = await this.bridge.exec(
-      `${this.rootPath}/bin/preflight.py`,
-      ['--json'],
-      { timeout: 30000 }
-    )
-
-    return {
-      passed: result.code === 0,
-      exitCode: result.code,
-      output: result.stdout,
-    }
+  async preflight() {
+    const r = await this.native.exec('preflight.py', ['--json'], {}, [0, 3, 4])
+    return { ...JSON.parse(r.stdout), exitCode: r.code }
   }
 }
-

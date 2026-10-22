@@ -1,19 +1,8 @@
-# Patch list for oss-contrib plugin
-# Adds the oss-contrib service to the Cordis context
-
-- id: oss-contrib
-  config:
-    paths:
-      root: F:/PR
-      state: F:/PR/state
-      tasks: F:/PR/tasks
-      archive: F:/PR/archive
-    github:
-      user: BlueX888
-      # token: set via $GITHUB_TOKEN or DSH credentials UI
-    quota:
-      pauseThreshold: 24
-      # dailyCap: optional daily PR limit
-    scheduler:
-      enabled: false
-      # interval: '0 */6 * * *'  # cron expression for auto-runs
+- insert:
+    - id: oss-contrib
+      name: dsh-plugin-oss-contrib
+      config:
+        paths:
+          root: F:/PR
+        scheduler:
+          enabled: false

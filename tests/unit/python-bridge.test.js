@@ -13,11 +13,11 @@ test('Python bridge returns valid JSON for simple module call', async () => {
     module: 'json',
     method: 'dumps',
     args: [{ test: 'data' }],
-    kwargs: {}
+    kwargs: {},
   })
 
   const proc = spawn('python', [pythonBridgePath], {
-    stdio: ['pipe', 'pipe', 'pipe']
+    stdio: ['pipe', 'pipe', 'pipe'],
   })
 
   let stdout = ''
@@ -42,11 +42,11 @@ test('Python bridge handles module import errors', async () => {
     module: 'nonexistent_module_12345',
     method: 'some_method',
     args: [],
-    kwargs: {}
+    kwargs: {},
   })
 
   const proc = spawn('python', [pythonBridgePath], {
-    stdio: ['pipe', 'pipe', 'pipe']
+    stdio: ['pipe', 'pipe', 'pipe'],
   })
 
   let stdout = ''

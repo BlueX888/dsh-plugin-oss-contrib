@@ -1,6 +1,6 @@
 {
   "name": "dsh-plugin-oss-contrib",
-  "version": "0.1.0",
+  "version": "0.2.1",
   "description": "Open source contribution pipeline for DeepSeek Harness - hunt, ship, track PRs across GitHub repositories",
   "main": "lib/index.js",
   "types": "lib/index.d.ts",
@@ -8,26 +8,58 @@
     "build": "tsc",
     "dev": "tsc --watch",
     "test": "node --test tests/**/*.test.js",
-    "prepublishOnly": "npm run build"
+    "prepack": "npm run build",
+    "pretest": "npm run build",
+    "test:core": "python scripts/check-core.py",
+    "format": "prettier --write src tests scripts/*.mjs package.json .prettierrc.json",
+    "format:check": "prettier --check src tests scripts/*.mjs package.json .prettierrc.json"
   },
-  "keywords": ["dsh-plugin", "oss", "github", "contribution", "agent"],
+  "files": [
+    "lib",
+    "python",
+    "cordis.patch.yml",
+    "locale",
+    "icon.svg",
+    "README.md",
+    "INSTALL.md",
+    "TROUBLESHOOTING.md",
+    "docs/VERIFICATION.md"
+  ],
+  "keywords": [
+    "dsh-plugin",
+    "oss",
+    "github",
+    "contribution",
+    "agent"
+  ],
   "author": "BlueX888",
   "license": "MIT",
   "type": "module",
   "dsh": {
     "bundle": {
-      "patch": ["cordis.patch.yml"]
+      "patch": "./cordis.patch.yml"
     }
   },
   "dependencies": {
-    "cordis": "^4.0.0-rc.9",
-    "schemastery": "^3.14.6"
+    "@deepseek-ai/schemastery": "~3.18.5",
+    "cron-parser": "^5.4.0"
   },
   "devDependencies": {
+    "@deepseek-ai/cordis": "~4.0.5",
     "@types/node": "^20.0.0",
-    "typescript": "^5.3.0"
+    "prettier": "^3.6.2",
+    "typescript": "^5.3.0",
+    "yaml": "^2.8.0"
   },
   "peerDependencies": {
-    "cordis": "^4.0.0-rc.9"
+    "@deepseek-ai/cordis": "~4.0.5"
+  },
+  "exports": {
+    ".": {
+      "types": "./lib/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
   }
 }
