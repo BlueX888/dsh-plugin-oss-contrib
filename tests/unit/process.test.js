@@ -14,7 +14,9 @@ test('timeout kills the Python process tree and disposal rejects future calls', 
       script,
       'import subprocess,sys,time\np=subprocess.Popen([sys.executable,"-c","import time; time.sleep(60)"])\nopen(sys.argv[1],"w").write(str(p.pid))\ntime.sleep(60)\n',
     )
-    await assert.rejects(() => bridge.exec(script, [pid], { timeout: 800 }), /timed out/)
+    // Hosted Windows runners can spend several seconds cold-starting Python.
+    // Leave startup headroom while still checking an actual timeout and dead child.
+    await assert.rejects(() => bridge.exec(script, [pid], { timeout: 15000 }), /timed out/)
     const child = Number(await readFile(pid, 'utf8'))
     assert.throws(() => process.kill(child, 0))
     await bridge.dispose()
