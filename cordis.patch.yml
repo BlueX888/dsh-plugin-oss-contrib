@@ -1,18 +1,19 @@
-# Default configuration for oss-contrib plugin
-# Override these values in your profile's cordis.patch.yml
+# Patch list for oss-contrib plugin
+# Adds the oss-contrib service to the Cordis context
 
-oss-contrib:
-  paths:
-    root: F:/PR
-    state: F:/PR/state
-    tasks: F:/PR/tasks
-    archive: F:/PR/archive
-  github:
-    user: BlueX888
-    # token: set via $GITHUB_TOKEN or DSH credentials UI
-  quota:
-    pauseThreshold: 24
-    # dailyCap: optional daily PR limit
-  scheduler:
-    enabled: false
-    # interval: '0 */6 * * *'  # cron expression for auto-runs
+- id: oss-contrib
+  config:
+    paths:
+      root: F:/PR
+      state: F:/PR/state
+      tasks: F:/PR/tasks
+      archive: F:/PR/archive
+    github:
+      user: BlueX888
+      # token: set via $GITHUB_TOKEN or DSH credentials UI
+    quota:
+      pauseThreshold: 24
+      # dailyCap: optional daily PR limit
+    scheduler:
+      enabled: false
+      # interval: '0 */6 * * *'  # cron expression for auto-runs

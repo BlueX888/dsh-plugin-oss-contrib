@@ -15,8 +15,9 @@
   "license": "MIT",
   "type": "module",
   "dsh": {
-    "bundle": true,
-    "patchFile": "cordis.patch.yml"
+    "bundle": {
+      "patch": ["cordis.patch.yml"]
+    }
   },
   "dependencies": {
     "cordis": "^4.0.0-rc.9",
